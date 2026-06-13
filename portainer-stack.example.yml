@@ -1,0 +1,48 @@
+# Example Portainer stack for Frigate Email Notifier
+#
+# Deploy in Portainer:
+#   Stacks -> Add stack -> Web editor (or Git repository)
+#
+# If using Git, set "Compose path" to: portainer-stack.example.yml
+#
+# In Portainer "Environment variables", define at least:
+#   MQTT_HOST, SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_TO
+# Optional: IMAGE_TAG (defaults to latest), MQTT_PORT, MQTT_USER, MQTT_PASS,
+#           ALERT_START_HOUR, ALERT_END_HOUR, EXCLUDED_LABELS, TZ
+#
+# If your MQTT broker runs in another stack, attach this service to the same
+# external network and set MQTT_HOST to that broker's service name.
+
+services:
+  frigate-email-notifier:
+    image: derpmhichurp/frigate-email-notifier:${IMAGE_TAG:-latest}
+    container_name: frigate-email-notifier
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: ${MQTT_HOST}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      MQTT_USER: ${MQTT_USER:-}
+      MQTT_PASS: ${MQTT_PASS:-}
+      MQTT_TOPIC_PREFIX: ${MQTT_TOPIC_PREFIX:-frigate}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_TO: ${SMTP_TO}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      ALERT_START_HOUR: ${ALERT_START_HOUR:-19}
+      ALERT_END_HOUR: ${ALERT_END_HOUR:-7}
+      EXCLUDED_LABELS: ${EXCLUDED_LABELS:-bird}
+      TZ: ${TZ:-America/New_York}
+    networks:
+      - frigate-email-notifier
+
+networks:
+  frigate-email-notifier:
+    driver: bridge
+
+  # Uncomment to reach a broker on an existing Docker network (e.g. Mosquitto):
+  # mqtt:
+  #   external: true
+  #   name: mosquitto_default

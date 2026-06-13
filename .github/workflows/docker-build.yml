@@ -1,0 +1,227 @@
+name: Build and Publish Docker Images
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'requirements*.txt'
+      - '.github/workflows/docker-build.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: |
+          mkdir -p test-results
+          pytest tests/ --junitxml=test-results/junit.xml --cov=app --cov-report=json -v
+
+      - name: Publish test results to GitHub
+        if: always() && !cancelled()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: test-results/junit.xml
+          check_name: Test results
+          comment_mode: off
+
+      - name: Coverage summary
+        if: always() && !cancelled()
+        run: |
+          echo '## Code coverage' >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage.json ]; then
+            python -c "
+          import json
+          with open('coverage.json') as f:
+              data = json.load(f)
+          totals = data.get('totals', {})
+          if totals:
+              print('| | Coverage |')
+              print('|---|---------|')
+              for metric in ('lines', 'statements', 'branches'):
+                  if metric in totals:
+                      pct = totals[metric]['percent_covered']
+                      print(f'|{metric}|{pct:.1f}%|')
+          " >> $GITHUB_STEP_SUMMARY
+          fi
+
+  docker-verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Prepare compose environment
+        run: cp .env.example .env
+
+      - name: Validate compose file
+        run: docker compose config
+
+      - name: Build image
+        run: docker compose build
+
+      - name: Smoke test imports in container
+        run: |
+          docker compose run --rm --no-deps frigate-email-notifier \
+            python -c "import app.config, app.frigate_handler"
+
+  validate-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate PR has version information
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if echo "$PR_TITLE $PR_BODY" | grep -qiE '(version|[0-9]+\.[0-9]+\.[0-9]+|semver|release|deps|bump)'; then
+            echo "✓ PR contains version information"
+            exit 0
+          fi
+
+          echo "Checking for version tags in branch..."
+          if git tag --merged HEAD | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "✓ Found version tags in branch history"
+            exit 0
+          fi
+
+          echo "::warning::PR does not appear to include version information"
+          echo "::notice::For releases, please include version information in the PR title or description"
+          echo "::notice::Example: 'Release 1.0.0' or 'Version bump to 1.0.0'"
+          exit 0
+
+  resolve-tag:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - name: Parse and validate release tag
+        id: parse
+        run: |
+          TAG_REF="${{ github.ref_name }}"
+
+          if [[ "$TAG_REF" == v* ]]; then
+            echo "::error::Tag '$TAG_REF' must not use a 'v' prefix. Use X.X.X only (e.g. 1.0.0)."
+            exit 1
+          fi
+
+          if [[ "$TAG_REF" == */* ]]; then
+            echo "::error::Tag '$TAG_REF' must be plain semver (e.g. 1.0.0), not '<service>/<version>'."
+            exit 1
+          fi
+
+          if ! echo "$TAG_REF" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "::error::Tag '$TAG_REF' is not valid semver (e.g. 1.0.0, 2.1.3-beta.1)."
+            exit 1
+          fi
+
+          echo "version=${TAG_REF}" >> "$GITHUB_OUTPUT"
+          echo "Release tag resolves to version=${TAG_REF}"
+
+  build-and-push:
+    needs: [test, resolve-tag]
+    if: success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve-tag.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Ensure Docker Hub credentials are set
+        run: |
+          if [ -z "${{ secrets.DOCKER_HUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKER_HUB_TOKEN }}" ]; then
+            echo "::error::Add repository secrets DOCKER_HUB_USERNAME and DOCKER_HUB_TOKEN."
+            exit 1
+          fi
+          if [ -z "${{ vars.DOCKER_HUB_REPOSITORY }}" ]; then
+            echo "::error::Add repository variable DOCKER_HUB_REPOSITORY (Docker Hub repository name)."
+            exit 1
+          fi
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Check if tag is on main branch
+        run: |
+          git fetch origin main || true
+          TAG_COMMIT="$(git rev-parse HEAD)"
+          if git show-ref --verify --quiet refs/remotes/origin/main && git merge-base --is-ancestor "${TAG_COMMIT}" origin/main 2>/dev/null; then
+            echo "IS_MAIN_BRANCH=true" >> $GITHUB_ENV
+            echo "Tag commit is on main - image will be tagged as 'latest' (if stable)"
+          else
+            echo "IS_MAIN_BRANCH=false" >> $GITHUB_ENV
+            echo "Tag commit is not on main - image will be tagged as 'beta'"
+          fi
+
+      - name: Set image names and tags
+        env:
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+          DOCKER_HUB_REPOSITORY: ${{ vars.DOCKER_HUB_REPOSITORY }}
+        run: |
+          IMAGE="${DOCKER_HUB_USERNAME}/${DOCKER_HUB_REPOSITORY}"
+          echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
+
+          TAGS="${IMAGE}:${VERSION}"
+          IS_MAIN="${{ env.IS_MAIN_BRANCH }}"
+          if [ "${IS_MAIN}" = "true" ] && [[ ! "$VERSION" =~ - ]]; then
+            TAGS="${TAGS}"$'\n'"${IMAGE}:latest"
+            echo "Tag on main, stable release - will also tag as 'latest'"
+          elif [ "${IS_MAIN}" = "false" ]; then
+            TAGS="${TAGS}"$'\n'"${IMAGE}:beta"
+            echo "Tag not on main - will also tag as 'beta'"
+          else
+            echo "Pre-release on main - will not tag as 'latest'"
+          fi
+
+          echo "Building version: ${VERSION}"
+          echo "TAGS<<EOF" >> $GITHUB_ENV
+          echo "$TAGS" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.TAGS }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max

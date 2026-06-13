@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+test-results/
+coverage.json
+.coverage
+Subscriber/bin/
+Subscriber/obj/
+Common/bin/
+Common/obj/
+TestIdeas/bin/
+TestIdeas/obj/
