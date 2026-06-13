@@ -5,21 +5,29 @@
 #
 # If using Git, set "Compose path" to: portainer-stack.example.yml
 #
-# In Portainer "Environment variables", define at least:
-#   MQTT_HOST, SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_TO
-# Optional: IMAGE_TAG (defaults to latest), MQTT_PORT, MQTT_USER, MQTT_PASS,
-#           ALERT_START_HOUR, ALERT_END_HOUR, EXCLUDED_LABELS, TZ
+# Uses host networking so the container shares the host's network stack.
+# Set MQTT_HOST to a hostname or IP the *host* can resolve (e.g. 127.0.0.1,
+# localhost, or a LAN hostname). Service names from other Docker stacks will
+# NOT resolve unless you use the external-network option below instead.
 #
-# If your MQTT broker runs in another stack, attach this service to the same
-# external network and set MQTT_HOST to that broker's service name.
+# In Portainer "Environment variables", define at least:
+#   SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_TO
+# Optional: MQTT_HOST (defaults to 127.0.0.1), IMAGE_TAG, MQTT_PORT,
+#           MQTT_USER, MQTT_PASS, ALERT_START_HOUR, ALERT_END_HOUR,
+#           EXCLUDED_LABELS, TZ
+#
+# Alternative: if your MQTT broker runs in another Compose stack, comment out
+# network_mode: host, uncomment the networks section on the service and the
+# external mqtt network below, and set MQTT_HOST to that broker's service name.
 
 services:
   frigate-email-notifier:
-    image: derpmhichurp/frigate-email-notifier:${IMAGE_TAG:-latest}
+    image: derpmhichurp/frigate_email_notifier:${IMAGE_TAG:-latest}
     container_name: frigate-email-notifier
+    network_mode: host
     restart: unless-stopped
     environment:
-      MQTT_HOST: ${MQTT_HOST}
+      MQTT_HOST: ${MQTT_HOST:-127.0.0.1}
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_USER: ${MQTT_USER:-}
       MQTT_PASS: ${MQTT_PASS:-}
@@ -35,14 +43,15 @@ services:
       ALERT_END_HOUR: ${ALERT_END_HOUR:-7}
       EXCLUDED_LABELS: ${EXCLUDED_LABELS:-bird}
       TZ: ${TZ:-America/New_York}
-    networks:
-      - frigate-email-notifier
+    # networks:
+    #   - frigate-email-notifier
+    #   - mqtt
 
-networks:
-  frigate-email-notifier:
-    driver: bridge
-
-  # Uncomment to reach a broker on an existing Docker network (e.g. Mosquitto):
-  # mqtt:
-  #   external: true
-  #   name: mosquitto_default
+# networks:
+#   frigate-email-notifier:
+#     driver: bridge
+#
+#   # Uncomment to reach a broker on an existing Docker network (e.g. Mosquitto):
+#   # mqtt:
+#   #   external: true
+#   #   name: mosquitto_default
