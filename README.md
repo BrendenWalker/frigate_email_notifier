@@ -97,6 +97,6 @@ SMTP_TO=you@example.com
 TZ=America/New_York
 ```
 
-4. If your MQTT broker is in another stack, uncomment the external network section in the stack file and attach the service to that network so `MQTT_HOST` can be the broker service name.
+4. This stack uses **host networking** so `MQTT_HOST` must be a hostname or IP the Docker **host** can reach (for example `127.0.0.1` or `localhost` for a broker on the same machine). If your MQTT broker is in another stack, use the commented external-network option in the stack file instead of host networking.
 
-Deploy the stack from Portainer; Portainer will build the image from the repo context on first deploy.
+Deploy the stack from Portainer; it pulls the image from Docker Hub.
