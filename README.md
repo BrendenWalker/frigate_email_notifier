@@ -45,7 +45,7 @@ docker compose up --build -d
 | `ALERT_START_HOUR` | `19` | Night window start (local time) |
 | `ALERT_END_HOUR` | `7` | Night window end (local time) |
 | `EXCLUDED_LABELS` | `bird` | Comma-separated labels to skip |
-| `TZ` | `UTC` | Container timezone |
+| `TZ` | `UTC` | IANA timezone used for event times and the alert window |
 
 ## Behavior
 
@@ -55,6 +55,7 @@ docker compose up --build -d
   - The label is not excluded (default: `bird`)
   - The event has a clip or snapshot
   - The event end time falls in the night window (default 7 PM–7 AM local time)
+  - That Frigate event has not already produced an email
 
 Logs are written to stdout for Docker.
 
@@ -94,7 +95,7 @@ SMTP_USER=alerts@example.com
 SMTP_PASS=your-smtp-password
 SMTP_FROM=alerts@example.com
 SMTP_TO=you@example.com
-TZ=America/New_York
+TZ=America/Los_Angeles
 ```
 
 4. If your MQTT broker is in another stack, uncomment the external network section in the stack file and attach the service to that network so `MQTT_HOST` can be the broker service name.

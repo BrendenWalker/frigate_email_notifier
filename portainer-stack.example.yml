@@ -34,7 +34,7 @@ services:
       ALERT_START_HOUR: ${ALERT_START_HOUR:-19}
       ALERT_END_HOUR: ${ALERT_END_HOUR:-7}
       EXCLUDED_LABELS: ${EXCLUDED_LABELS:-bird}
-      TZ: ${TZ:-America/New_York}
+      TZ: ${TZ:-UTC}
     networks:
       - frigate-email-notifier
 

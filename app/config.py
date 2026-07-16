@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def _require(name: str) -> str:
@@ -51,6 +52,7 @@ class Config:
     alert_start_hour: int
     alert_end_hour: int
     excluded_labels: frozenset[str]
+    timezone_name: str
 
     @property
     def events_topic(self) -> str:
@@ -78,6 +80,7 @@ class Config:
             alert_start_hour=_int("ALERT_START_HOUR", 19),
             alert_end_hour=_int("ALERT_END_HOUR", 7),
             excluded_labels=frozenset(label.lower() for label in _csv("EXCLUDED_LABELS", "bird")),
+            timezone_name=_optional("TZ", "UTC"),
         )
 
     def validate(self) -> None:
@@ -85,3 +88,7 @@ class Config:
             raise ValueError("SMTP_TO must contain at least one recipient")
         if not (0 <= self.alert_start_hour <= 23 and 0 <= self.alert_end_hour <= 23):
             raise ValueError("ALERT_START_HOUR and ALERT_END_HOUR must be between 0 and 23")
+        try:
+            ZoneInfo(self.timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"TZ is not a recognized timezone: {self.timezone_name}") from exc

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timezone, tzinfo
+from zoneinfo import ZoneInfo
 
 from app.config import Config
 from app.email_sender import send_alert_email
@@ -10,12 +12,17 @@ from app.models import Event
 
 logger = logging.getLogger(__name__)
 
+_EMAILED_EVENT_HISTORY_SIZE = 1024
+
 
 class FrigateHandler:
     def __init__(self, config: Config) -> None:
         self._config = config
+        self._timezone = ZoneInfo(config.timezone_name)
         self._last_event: Event | None = None
         self._last_event_json: str | None = None
+        self._emailed_event_ids: set[str] = set()
+        self._emailed_event_history: deque[str] = deque()
 
     def handle_message(self, topic: str, payload: bytes) -> None:
         if topic == self._config.events_topic:
@@ -66,14 +73,20 @@ class FrigateHandler:
         if topic != expected_topic:
             return
 
-        end_time = _unix_to_local(after.end_time)
+        event_id = _event_id(event)
+        if event_id in self._emailed_event_ids:
+            logger.debug("Skipping already emailed event: %s", event_id)
+            return
+
+        end_time = _unix_to_local(after.end_time, self._timezone)
         if end_time is None:
             logger.warning("Snapshot received without event end time")
             return
 
+        start_time = _unix_to_local(event.before.start_time, self._timezone)
         subject = (
             f"{after.label} detected.  "
-            f"{_unix_to_local(event.before.start_time)} {end_time}"
+            f"{_format_event_time(start_time)} - {_format_event_time(end_time)}"
         )
 
         if _is_night(
@@ -88,20 +101,46 @@ class FrigateHandler:
                     payload,
                     self._last_event_json or "",
                 )
+                self._remember_emailed_event(event_id)
             except Exception:
                 logger.exception("Failed to send alert email")
         else:
             logger.debug("Outside alert window: %s", subject)
+
+    def _remember_emailed_event(self, event_id: str) -> None:
+        if len(self._emailed_event_history) >= _EMAILED_EVENT_HISTORY_SIZE:
+            expired_id = self._emailed_event_history.popleft()
+            self._emailed_event_ids.remove(expired_id)
+        self._emailed_event_history.append(event_id)
+        self._emailed_event_ids.add(event_id)
 
     @property
     def last_event(self) -> Event | None:
         return self._last_event
 
 
-def _unix_to_local(unix_time: float | None) -> datetime | None:
+def _event_id(event: Event) -> str:
+    before = event.before
+    after = event.after
+    assert before is not None and after is not None
+    return after.id or before.id or (
+        f"{after.camera}:{after.label}:{before.start_time}:{after.end_time}"
+    )
+
+
+def _unix_to_local(
+    unix_time: float | None,
+    local_timezone: tzinfo,
+) -> datetime | None:
     if unix_time is None:
         return None
-    return datetime.fromtimestamp(unix_time, tz=timezone.utc).astimezone()
+    return datetime.fromtimestamp(unix_time, tz=timezone.utc).astimezone(local_timezone)
+
+
+def _format_event_time(value: datetime | None) -> str:
+    if value is None:
+        return "unknown"
+    return value.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 def _is_night(event_end: datetime, start_hour: int, end_hour: int) -> bool:

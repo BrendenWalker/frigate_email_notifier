@@ -17,6 +17,7 @@ def test_from_env_required_and_defaults(env_vars: None) -> None:
     assert config.alert_end_hour == 7
     assert config.excluded_labels == frozenset({"bird"})
     assert config.smtp_to == ["you@example.com", "other@example.com"]
+    assert config.timezone_name == "UTC"
 
 
 def test_topic_properties(minimal_config: Config) -> None:
@@ -52,3 +53,20 @@ def test_excluded_labels_case_insensitive(env_vars: None, monkeypatch: pytest.Mo
     config = Config.from_env()
 
     assert config.excluded_labels == frozenset({"bird", "cat"})
+
+
+def test_timezone_from_env(env_vars: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+
+    config = Config.from_env()
+    config.validate()
+
+    assert config.timezone_name == "America/Los_Angeles"
+
+
+def test_validate_invalid_timezone(env_vars: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TZ", "Not/A_Timezone")
+    config = Config.from_env()
+
+    with pytest.raises(ValueError, match="TZ"):
+        config.validate()

@@ -2,6 +2,8 @@ FROM python:3.12-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache tzdata
+
 RUN adduser -D -g '' appuser
 
 COPY requirements.txt .
