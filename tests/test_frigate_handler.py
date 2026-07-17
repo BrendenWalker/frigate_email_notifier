@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.config import Config
-from app.frigate_handler import FrigateHandler
+from app.frigate_handler import FrigateHandler, _unix_to_local
 
 
 def _unix(dt: datetime) -> float:
@@ -18,6 +19,7 @@ def _event_payload(
     *,
     camera: str = "front_door",
     label: str = "person",
+    event_id: str = "event-1",
     end_time: float,
     has_snapshot: bool = True,
     has_clip: bool = False,
@@ -26,11 +28,13 @@ def _event_payload(
         {
             "type": "end",
             "before": {
+                "id": event_id,
                 "camera": camera,
                 "label": label,
                 "start_time": end_time - 10,
             },
             "after": {
+                "id": event_id,
                 "camera": camera,
                 "label": label,
                 "end_time": end_time,
@@ -80,7 +84,7 @@ def test_snapshot_sends_email_during_night_window(
     mock_send: object,
     night_config: Config,
 ) -> None:
-    mock_unix_to_local.side_effect = lambda _t: datetime(2024, 1, 15, 20, 0)
+    mock_unix_to_local.side_effect = lambda _t, _tz: datetime(2024, 1, 15, 20, 0)
     end_time = _unix(datetime(2024, 1, 15, 20, 0))
     handler = FrigateHandler(night_config)
     handler.handle_message("frigate/events", _event_payload(end_time=end_time))
@@ -103,7 +107,7 @@ def test_snapshot_skipped_outside_alert_window(
     mock_send: object,
     night_config: Config,
 ) -> None:
-    mock_unix_to_local.side_effect = lambda _t: datetime(2024, 1, 15, 14, 0)
+    mock_unix_to_local.side_effect = lambda _t, _tz: datetime(2024, 1, 15, 14, 0)
     end_time = _unix(datetime(2024, 1, 15, 14, 0))
     handler = FrigateHandler(night_config)
     handler.handle_message("frigate/events", _event_payload(end_time=end_time))
@@ -183,3 +187,40 @@ def test_snapshot_skipped_without_prior_event(
     )
 
     mock_send.assert_not_called()
+
+
+@patch("app.frigate_handler.send_alert_email")
+@patch("app.frigate_handler._unix_to_local")
+def test_duplicate_snapshots_send_only_one_email(
+    mock_unix_to_local: object,
+    mock_send: object,
+    night_config: Config,
+) -> None:
+    mock_unix_to_local.side_effect = lambda _t, _tz: datetime(2024, 1, 15, 20, 0)
+    end_time = _unix(datetime(2024, 1, 15, 20, 0))
+    handler = FrigateHandler(night_config)
+    handler.handle_message(
+        "frigate/events",
+        _event_payload(event_id="event-123", end_time=end_time),
+    )
+
+    handler.handle_message("frigate/front_door/person/snapshot", b"first")
+    handler.handle_message("frigate/front_door/person/snapshot", b"second")
+
+    mock_send.assert_called_once()
+
+
+def test_unix_timestamp_uses_configured_timezone() -> None:
+    timestamp = datetime(2026, 7, 16, 23, 5, 47, tzinfo=timezone.utc).timestamp()
+
+    result = _unix_to_local(timestamp, ZoneInfo("America/Los_Angeles"))
+
+    assert result == datetime(
+        2026,
+        7,
+        16,
+        16,
+        5,
+        47,
+        tzinfo=ZoneInfo("America/Los_Angeles"),
+    )
